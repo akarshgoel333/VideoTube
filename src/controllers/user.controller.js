@@ -1,17 +1,19 @@
-import { asyncHandler } from "../utils/asyncHandler.js";
-import {ApiError} from "../utils/ApiError.js";
+import { asyncHandler } from "../utils/asyncHandler.js"
+import {ApiError} from "../utils/ApiError.js"
 import {User} from "../models/user.model.js"
 import {uploadOnCloudinary} from "../utils/cloudinary.js"
 import {ApiResponse} from "../utils/ApiResponse.js"
+import jwt from "jsonwebtoken"
 
 const generateAccessAndRefreshTokens = async(userId) => {
     try {
         const user = await User.findById(userId);
         const accessToken = user.generateAccessToken();
         const refreshToken = user.generateRefreshToken();
-        
+
+        // hume refreshtoken hi database mein save krna hai access token toh hum user ko dekr chhond denge so that baar baar password n puchna pde
         user.refreshToken = refreshToken;
-        //ab kaafi fields required hai agr sirf refreshtoken save krenge toh error aa jayega so better way to do it
+        //ab kaafi fields required hai like password toh agr sirf refreshtoken save krenge toh error aa jayega so better way to do it
         await user.save({validateBeforeSave: false})
         return {accessToken, refreshToken};
     } catch (error) {
@@ -147,30 +149,6 @@ const loginUser = asyncHandler( async(req,res)=>{
     )
 })
 
-// const logoutUser = asyncHandler( async(req,res) => {
-//     console.log("1st step");
-//     await User.findByIdAndUpdate(
-//         req.user._id,
-//         {
-//             $unset: {
-//                 refreshToken: 1
-//             }
-//         }
-//     )
-//     console.log("2nd step");
-
-//     const options = {
-//         httpOnly: true,
-//         secure: true
-//     }
-//     return res
-//     .status(200)
-//     .clearCookie("accessToken", options)
-//     .clearCookie("refreshToken", options)
-//     .json(
-//         new ApiResponse(200, {}, "User Logged Out")
-//     )
-// })
 const logoutUser = asyncHandler(async(req, res) => {
     await User.findByIdAndUpdate(
         req.user._id,
@@ -180,7 +158,7 @@ const logoutUser = asyncHandler(async(req, res) => {
             }
         },
         {
-            new: true
+            returnDocument: "after" // Returns updated document without triggering deprecation warnings
         }
     )
 
@@ -196,10 +174,52 @@ const logoutUser = asyncHandler(async(req, res) => {
     .json(new ApiResponse(200, {}, "User logged Out"))
 })
 
+const refreshAccessToken = asyncHandler(async (req,res)=>{
+    // check krna hai ki refreshtoken humare pass hai ki nhi
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken;
+    if(!incomingRefreshToken){
+        throw new ApiError(401, "Unauthorized request")
+    }
 
+    try {
+        // koi or refreshtoken ya glt refreshtoken aagya tb k liye
+        const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+        const user = await User.findById(decodedToken?._id)
+        if(!user){
+            throw new ApiError(401, "Invalid refresh token")
+        }
+    
+        if(incomingRefreshToken !== user?.refreshToken){
+            throw new ApiError(401, "Refresh token is expired or used");
+        }
+    
+        const options = {
+            httpOnly: true,
+            secure: true
+        }
+    
+        const {accessToken, newRefreshToken} = await generateAccessAndRefreshTokens(user._id);
+        
+        // sb shi milne k baad new refresh token or access token database mein update krdia
+        return res
+        .status(200)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", newRefreshToken, options)
+        .json(
+            new ApiResponse(
+                200,
+                {accessToken, refreshToken: newRefreshToken},
+                "Access token refreshed"
+            )
+        )
+    } catch (err) {
+        throw new ApiError(401, err?.message || "Refresh token is not valid")
+    }
+})
 
 export {
     registerUser,
     loginUser,
-    logoutUser
+    logoutUser,
+    refreshAccessToken
 }
