@@ -8,8 +8,6 @@ const subscriptionSchema = new Schema({
     channel: {
         type: Schema.Types.ObjectId,
         ref: "User",
-        required: true,
-
     }
 }, {timestamps: true})
 
